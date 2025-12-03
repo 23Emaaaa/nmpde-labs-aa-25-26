@@ -145,10 +145,28 @@ DiffusionReaction::assemble()
     Functions::ZeroFunction<dim>              bc_function;
 
     std::map<types::boundary_id, const Function<dim> *> boundary_functions;
-    boundary_functions[0] = &bc_function;
-    boundary_functions[1] = &bc_function;
-    boundary_functions[2] = &bc_function;
-    boundary_functions[3] = &bc_function;
+
+    /*
+      // Since the number of faces is becoming greater (and it isn't a good
+      // practice to hardcode indices) we use a for loop.
+      ============= AVOID THIS =============
+      boundary_functions[0] = &bc_function;
+      boundary_functions[1] = &bc_function;
+      boundary_functions[2] = &bc_function;
+      boundary_functions[3] = &bc_function;
+      boundary_functions[4] = &bc_function; // Added for 3D
+      boundary_functions[5] = &bc_function; // Added for 3D
+      boundary_functions[6] = &bc_function; // Added for safety since it depends
+      on how the mesh has been constructed
+      ======================================
+    */
+
+    // We apply u=0 (ZeroFunction) to all faces of the cube.
+    // In 3D, a cube has 6 faces. We map a safe range of IDs to be sure.
+    for (unsigned int face = 0; face < 2 * dim; ++face)
+      {
+        boundary_functions[face] = &bc_function;
+      }
 
     VectorTools::interpolate_boundary_values(dof_handler,
                                              boundary_functions,
