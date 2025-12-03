@@ -37,8 +37,10 @@ using namespace dealii;
 class DiffusionReaction
 {
 public:
-  // Physical dimension (1D, 2D, 3D)
-  static constexpr unsigned int dim = 2;
+  // Physical dimension of the problem (1D, 2D, or 3D).
+  // Set to 3 to handle 3D diffusion-reaction problems.
+  // @note Previously set to 2 for 2D problems.
+  static constexpr unsigned int dim = 3;
 
   // Constructor.
   DiffusionReaction(const std::string  &mesh_file_name_,
