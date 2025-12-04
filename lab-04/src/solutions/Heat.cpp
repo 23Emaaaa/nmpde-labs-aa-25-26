@@ -84,7 +84,8 @@ Heat::setup()
 
     pcout << "  Initializing vectors" << std::endl;
     system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    solution.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+    solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+    solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
   }
 }
 
@@ -130,8 +131,8 @@ Heat::assemble()
       cell_rhs    = 0.0;
 
       // Evaluate the old solution and its gradient on quadrature nodes.
-      fe_values.get_function_values(solution_old, solution_old_values);
-      fe_values.get_function_gradients(solution_old, solution_old_grads);
+      fe_values.get_function_values(solution, solution_old_values);
+      fe_values.get_function_gradients(solution, solution_old_grads);
 
       for (unsigned int q = 0; q < n_q; ++q)
         {
@@ -144,7 +145,38 @@ Heat::assemble()
           for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                {}
+                {
+                  // Time derivative.
+                  cell_matrix(i, j) += (1.0 / delta_t) *             //
+                                       fe_values.shape_value(i, q) * //
+                                       fe_values.shape_value(j, q) * //
+                                       fe_values.JxW(q);
+
+                  // Diffusion.
+                  cell_matrix(i, j) +=
+                    theta * mu_loc *                             //
+                    scalar_product(fe_values.shape_grad(i, q),   //
+                                   fe_values.shape_grad(j, q)) * //
+                    fe_values.JxW(q);
+                }
+
+              // Time derivative.
+              cell_rhs(i) += (1.0 / delta_t) *             //
+                             fe_values.shape_value(i, q) * //
+                             solution_old_values[q] *      //
+                             fe_values.JxW(q);
+
+              // Diffusion.
+              cell_rhs(i) -= (1.0 - theta) * mu_loc *                   //
+                             scalar_product(fe_values.shape_grad(i, q), //
+                                            solution_old_grads[q]) *    //
+                             fe_values.JxW(q);
+
+              // Forcing term.
+              cell_rhs(i) +=
+                (theta * f_new_loc + (1.0 - theta) * f_old_loc) * //
+                fe_values.shape_value(i, q) *                     //
+                fe_values.JxW(q);
             }
         }
 
@@ -203,4 +235,40 @@ Heat::output() const
 
 void
 Heat::run()
-{}
+{
+  // Setup initial conditions.
+  {
+    setup();
+
+    VectorTools::interpolate(dof_handler, FunctionU0(), solution_owned);
+    solution = solution_owned;
+
+    time            = 0.0;
+    timestep_number = 0;
+
+    // Output initial condition.
+    output();
+  }
+
+  pcout << "===============================================" << std::endl;
+
+  // Time-stepping loop.
+  while (time < T - 0.5 * delta_t)
+    {
+      time += delta_t;
+      ++timestep_number;
+
+      pcout << "Timestep " << std::setw(3) << timestep_number
+            << ", time = " << std::setw(4) << std::fixed << std::setprecision(2)
+            << time << " : ";
+
+      assemble();
+      solve_linear_system();
+
+      // Perform parallel communication to update the ghost values of the
+      // solution vector.
+      solution = solution_owned;
+
+      output();
+    }
+}

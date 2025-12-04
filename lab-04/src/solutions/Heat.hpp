@@ -43,6 +43,24 @@ public:
   // Physical dimension (1D, 2D, 3D)
   static constexpr unsigned int dim = 3;
 
+  // Initial condition.
+  class FunctionU0 : public Function<dim>
+  {
+  public:
+    // Constructor.
+    FunctionU0() = default;
+
+    // Evaluation of the function.
+    virtual double
+    value(const Point<dim> &p,
+          const unsigned int /*component*/ = 0) const override
+    {
+      return p[0] * (1.0 - p[0]) * //
+             p[1] * (1.0 - p[1]) * //
+             p[2] * (1.0 - p[2]);
+    }
+  };
+
   // Constructor.
   Heat(const std::string                               &mesh_file_name_,
        const unsigned int                              &r_,
@@ -135,6 +153,9 @@ protected:
 
   // System right-hand side.
   TrilinosWrappers::MPI::Vector system_rhs;
+
+  // System solution, without ghost elements.
+  TrilinosWrappers::MPI::Vector solution_owned;
 
   // System solution, with ghost elements.
   TrilinosWrappers::MPI::Vector solution;
