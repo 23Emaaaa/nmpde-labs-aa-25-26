@@ -182,14 +182,19 @@ DiffusionReaction::solve()
 {
   std::cout << "===============================================" << std::endl;
 
-  ReductionControl solver_control(/* maxiter = */ 1000,
+  PreconditionSSOR preconditioner;
+  preconditioner.initialize(
+    system_matrix, PreconditionSSOR<SparseMatrix<double>>::AdditionalData(1.0));
+
+  ReductionControl solver_control(/* maxiter = */ 10000,
                                   /* tolerance = */ 1.0e-16,
                                   /* reduce = */ 1.0e-6);
 
   SolverCG<Vector<double>> solver(solver_control);
 
   std::cout << "  Solving the linear system" << std::endl;
-  solver.solve(system_matrix, solution, system_rhs, PreconditionIdentity());
+
+  solver.solve(system_matrix, solution, system_rhs, preconditioner);
   std::cout << "  " << solver_control.last_step() << " CG iterations"
             << std::endl;
 }
