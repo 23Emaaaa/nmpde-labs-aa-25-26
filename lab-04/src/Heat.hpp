@@ -43,6 +43,19 @@ public:
   // Physical dimension (1D, 2D, 3D)
   static constexpr unsigned int dim = 3;
 
+  // Nested class added for Initial Conditions.
+  class FunctionU0 : public Function<dim>
+  {
+  public:
+    FunctionU0() = default;
+
+    virtual double
+    value(const Point<dim> &p, const unsigned int = 0) const override
+    {
+      return p[0] * (p[0] - 1) * p[1] * (p[1] - 1) * p[2] * (p[2] - 1);
+    }
+  };
+
   // Constructor.
   Heat(const std::string                               &mesh_file_name_,
        const unsigned int                              &r_,
@@ -130,20 +143,26 @@ protected:
   // DoF handler.
   DoFHandler<dim> dof_handler;
 
-  // System matrix.
+  // ============================================================
+  // --- Removed "solution_old" - redundant and memory damage ---
+  // ============================================================
+
+  // --- NEW STORAGE FOR THE CONSTANT MATRIX ---
+  TrilinosWrappers::SparseMatrix mass_matrix;
+  TrilinosWrappers::SparseMatrix stiffness_matrix;
+  // ---------------------------------------------
+
+  // System matrix (LHS).
   TrilinosWrappers::SparseMatrix system_matrix;
 
-  // System right-hand side.
+  // System vector (RHS).
   TrilinosWrappers::MPI::Vector system_rhs;
 
-  // System solution, with ghost elements.
-  TrilinosWrappers::MPI::Vector solution;
-
-  // Solution vector for the solver (owned DoFs only).
+  // Solution vector for the solver (owned DoFs only - for solvers).
   TrilinosWrappers::MPI::Vector solution_owned;
 
-  // Solution from the previous step (ghosted) for assembly.
-  TrilinosWrappers::MPI::Vector solution_old;
+  // Solution from the previous step (ghosted DoFs) for assembly/output.
+  TrilinosWrappers::MPI::Vector solution;
 
   // Output stream for process 0.
   ConditionalOStream pcout;
