@@ -139,6 +139,12 @@ protected:
   // System solution, with ghost elements.
   TrilinosWrappers::MPI::Vector solution;
 
+  // Solution vector for the solver (owned DoFs only).
+  TrilinosWrappers::MPI::Vector solution_owned;
+
+  // Solution from the previous step (ghosted) for assembly.
+  TrilinosWrappers::MPI::Vector solution_old;
+
   // Output stream for process 0.
   ConditionalOStream pcout;
 };
