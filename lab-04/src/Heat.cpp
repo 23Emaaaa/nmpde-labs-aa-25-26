@@ -1,18 +1,5 @@
 #include "Heat.hpp"
 
-// Define the Initial Condition as a class inheriting from Function<dim>
-template <int dim>
-class InitialCondition : public Function<dim>
-{
-public:
-  virtual double
-  value(const Point<dim> &p,
-        const unsigned int /*component*/ = 0) const override
-  {
-    return p[0] * (p[0] - 1) * p[1] * (p[1] - 1) * p[2] * (p[2] - 1);
-  }
-};
-
 void
 Heat::setup()
 {
@@ -98,7 +85,7 @@ Heat::setup()
     // Vector with ghost elements (read only - access to neighbors).
     pcout << "  Initializing vectors" << std::endl;
     system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    solution.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+    solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
 
     // Vector for the solver (write access - no ghost).
     solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
@@ -130,11 +117,8 @@ Heat::assemble()
   system_matrix = 0.0;
   system_rhs    = 0.0;
 
-  // Evaluation of the old solution on quadrature nodes of current cell.
-  std::vector<double> solution_old_values(n_q);
-
-  // Evaluation of the gradient of the old solution on quadrature nodes of
-  // current cell.
+  // 1. Prepare vectors store u^n values and gradients.
+  std::vector<double>         solution_old_values(n_q);
   std::vector<Tensor<1, dim>> solution_old_grads(n_q);
 
   for (const auto &cell : dof_handler.active_cell_iterators())
@@ -143,14 +127,13 @@ Heat::assemble()
         continue;
 
       fe_values.reinit(cell);
-
       cell_matrix = 0.0;
       cell_rhs    = 0.0;
 
-      // 1. Get U^n and grad(U^n) at quadrature points.
-      // Evaluate the old solution and its gradient on quadrature nodes.
-      fe_values.get_function_values(solution_old, solution_old_values);
-      fe_values.get_function_gradients(solution_old, solution_old_grads);
+      // 2. Extract u^n (old solution) values onto quadrature points.
+      // FIX: Use 'solution', not 'solution_old'
+      fe_values.get_function_values(solution, solution_old_values);
+      fe_values.get_function_gradients(solution, solution_old_grads);
 
       for (unsigned int q = 0; q < n_q; ++q)
         {
@@ -168,34 +151,35 @@ Heat::assemble()
               const double         phi_i      = fe_values.shape_value(i, q);
               const Tensor<1, dim> grad_phi_i = fe_values.shape_grad(i, q);
 
-              // --- RHS Assembly ---
-              // Terms: (U^n, v) - (1 - theta)dt * (mu grad U^n, grad v) +
-              // Force.
-
-              double rhs_mass_term  = solution_old_values[q] * phi_i;
-              double rhs_stiff_term = -(1.0 - theta) * delta_t * mu_loc *
-                                      (solution_old_grads[q] * grad_phi_i);
-              double rhs_force_term =
-                delta_t * (theta * f_new_loc + (1.0 - theta) * f_old_loc) *
-                phi_i;
-
-              cell_rhs(i) +=
-                (rhs_mass_term + rhs_stiff_term + rhs_force_term) * dx;
-
-              // --- Matrix Assembly ---
-              // Terms: (u, v) + theta * dt * (mu grad u, grad v)
+              // --- MATRIX ASSEMBLY (LHS) ---
+              // (1/dt) * M + theta * A.
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
                 {
                   const double         phi_j      = fe_values.shape_value(j, q);
                   const Tensor<1, dim> grad_phi_j = fe_values.shape_grad(j, q);
 
-                  double matrix_mass_term = phi_j * phi_i;
-                  double matrix_stiff_term =
-                    theta * delta_t * mu_loc * (grad_phi_j * grad_phi_i);
+                  double mass_term = (1.0 / delta_t) * phi_i * phi_j;
+                  double stiff_term =
+                    theta * mu_loc * (grad_phi_i * grad_phi_j);
 
-                  cell_matrix(i, j) +=
-                    (matrix_mass_term + matrix_stiff_term) * dx;
+                  cell_matrix(i, j) += (mass_term + stiff_term) * dx;
                 }
+
+              // --- MATRIX ASSEMBLY (RHS) ---
+
+              // Term 1: Mass part (u^n / dt)
+              double rhs_mass =
+                (1.0 / delta_t) * phi_i * solution_old_values[q];
+
+              // Term 2: Stiffness part - (1-theta) * mu * grad(u^n) * grad(v)
+              double rhs_stiff =
+                -(1.0 - theta) * mu_loc * (grad_phi_i * solution_old_grads[q]);
+
+              // Term 3: Forcing part
+              double rhs_force =
+                (theta * f_new_loc + (1.0 - theta) * f_old_loc) * phi_i;
+
+              cell_rhs(i) += (rhs_mass + rhs_stiff + rhs_force) * dx;
             }
         }
 
@@ -263,36 +247,39 @@ Heat::run()
   setup();
 
   // 1. Initial Condition
-  // Define u0(x) = x(x-1)y(y-1)z(z-1)
   pcout << "Setting initial condition..." << std::endl;
 
-  // Instantiate the class defined above (top fo the file)
-  InitialCondition<dim> initial_condition;
+  // Use the nested class we defined in the header.
+  VectorTools::interpolate(dof_handler, FunctionU0(), solution_owned);
 
-  // Let's use the object not a lambda as done before.
-  VectorTools::interpolate(dof_handler, initial_condition, solution_owned);
+  // Copy owned values to ghosted vector 'solution' so we can read them in
+  // assemble().
+  solution = solution_owned;
 
-  // Set U^n = U^0
-  solution     = solution_owned;
-  solution_old = solution_owned;
+  // Sets up the time.
+  time            = 0.0;
+  timestep_number = 0;
+  // FIX: removed 'time_step = ...' because delta_t is const and already set.
 
   // Output initial state
   output();
+
+  pcout << "===============================================" << std::endl;
 
   // 2. Time Loop
   pcout << "Starting the loop..." << std::endl;
   while (time < T - 0.5 * delta_t)
     {
       time += delta_t;
-      timestep_number++;
-
-      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
+      ++timestep_number;
+      pcout << "Timestep " << timestep_number << ", time =" << time
+            << std::endl;
 
       assemble();
       solve_linear_system();
 
-      // Update for next step: U^n <- U^{n+1}
-      solution_old = solution_owned;
+      // FIX: Update 'solution' (ghosted) with 'solution_owned'
+      solution = solution_owned;
 
       output();
     }
