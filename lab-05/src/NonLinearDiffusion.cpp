@@ -204,7 +204,39 @@ NonLinearDiffusion::solve_system()
 
 void
 NonLinearDiffusion::solve_newton()
-{}
+{
+  const double         u_loc      = solution_loc[q];
+  const Tensor<1, dim> grad_u_loc = solution_gradient_loc[q];
+
+  // Coefficient: (mu_0 + mu_1 * u^2)
+  const double diffusion_coefficient = mu_0_loc + mu_1_loc * u_loc * u_loc;
+
+  // Derivative of Coefficient: (2 * mu_1 * u)
+  const double diffusion_derivative = 2 * mu_1_loc * u_loc;
+
+  for (unsigned int i = 0; i < dofs_per_cell; ++i)
+    {
+      // The Residual (RHS):
+      // RHS_i = \int f * phi_i - (mu_0 + mu_1 u^2) * grad_u * grad_phi_i
+      cell_rhs(i) +=
+        (f_loc * fe_values.shape_value(i, q) -
+         diffusion_coefficient * grad_u_loc * fe_values.shape_grad(i, q)) *
+        fe_values.JxW(q);
+
+      for (unsigned int j = 0; j < dofs_per_cell; ++j)
+        {
+          // The Jacobian - Matrix A - LHS
+          // J_ij = \int (mu_0 + mu_1 u^2) * grad_phi_j * grad_phi_i
+          //           + (2 mu_1 u) * phi_j * (grad_u * grad_phi_i)
+          cell_matrix(i, j) +=
+            (diffusion_coefficient *
+               (fe_values.shape_grad(j, q) * fe_values.shape_grad(i, q)) +
+             diffusion_derivative * fe_values.shape_value(j, q) *
+               (grad_u_loc * fe_values.shape_grad(i, q))) *
+            fe_values.JxW(q);
+        }
+    }
+}
 
 void
 NonLinearDiffusion::output() const
