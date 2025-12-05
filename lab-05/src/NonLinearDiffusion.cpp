@@ -103,6 +103,41 @@ NonLinearDiffusion::setup()
   }
 }
 
+// Should stay int he func "assemble_system()"
+/*
+  const double         u_loc      = solution_loc[q];
+  const Tensor<1, dim> grad_u_loc = solution_gradient_loc[q];
+
+  // Coefficient: (mu_0 + mu_1 * u^2)
+  const double diffusion_coefficient = mu_0_loc + mu_1_loc * u_loc * u_loc;
+
+  // Derivative of Coefficient: (2 * mu_1 * u)
+  const double diffusion_derivative = 2 * mu_1_loc * u_loc;
+
+  for (unsigned int i = 0; i < dofs_per_cell; ++i)
+    {
+      // The Residual (RHS):
+      // RHS_i = \int f * phi_i - (mu_0 + mu_1 u^2) * grad_u * grad_phi_i
+      cell_rhs(i) +=
+        (f_loc * fe_values.shape_value(i, q) -
+         diffusion_coefficient * grad_u_loc * fe_values.shape_grad(i, q)) *
+        fe_values.JxW(q);
+
+      for (unsigned int j = 0; j < dofs_per_cell; ++j)
+        {
+          // The Jacobian - Matrix A - LHS
+          // J_ij = \int (mu_0 + mu_1 u^2) * grad_phi_j * grad_phi_i
+          //           + (2 mu_1 u) * phi_j * (grad_u * grad_phi_i)
+          cell_matrix(i, j) +=
+            (diffusion_coefficient *
+               (fe_values.shape_grad(j, q) * fe_values.shape_grad(i, q)) +
+             diffusion_derivative * fe_values.shape_value(j, q) *
+               (grad_u_loc * fe_values.shape_grad(i, q))) *
+            fe_values.JxW(q);
+        }
+    }
+*/
+
 void
 NonLinearDiffusion::assemble_system()
 {
@@ -205,37 +240,48 @@ NonLinearDiffusion::solve_system()
 void
 NonLinearDiffusion::solve_newton()
 {
-  const double         u_loc      = solution_loc[q];
-  const Tensor<1, dim> grad_u_loc = solution_gradient_loc[q];
+  pcout << "Solving with Newton's method..." << std::endl;
 
-  // Coefficient: (mu_0 + mu_1 * u^2)
-  const double diffusion_coefficient = mu_0_loc + mu_1_loc * u_loc * u_loc;
+  const unsigned int max_non_linear_iterations = 20;
+  const double       tolerance                 = 1e-6;
 
-  // Derivative of Coefficient: (2 * mu_1 * u)
-  const double diffusion_derivative = 2 * mu_1_loc * u_loc;
+  // We start with an initial guess u=0 (solution vector is initialized to 0 in
+  // setup). However, we must ensure the ghosted vector 'solution' is up to date
+  // before the first assembly.
+  solution = solution_owned;
 
-  for (unsigned int i = 0; i < dofs_per_cell; ++i)
+  for (unsigned int n_iter = 0; n_iter < max_non_linear_iterations; ++n_iter)
     {
-      // The Residual (RHS):
-      // RHS_i = \int f * phi_i - (mu_0 + mu_1 u^2) * grad_u * grad_phi_i
-      cell_rhs(i) +=
-        (f_loc * fe_values.shape_value(i, q) -
-         diffusion_coefficient * grad_u_loc * fe_values.shape_grad(i, q)) *
-        fe_values.JxW(q);
+      pcout << "  Newton iteration " << n_iter << "..." << std::endl;
 
-      for (unsigned int j = 0; j < dofs_per_cell; ++j)
+      // 1. Assemble the Jacobian matrix and Residual vector based on the
+      // current 'solution'.
+      assemble_system();
+
+      // 2. Check convergence based on the residual norm.
+      const double res_norm = residual_vector.l2_norm();
+      pcout << "    Residual norm: " << res_norm << std::endl;
+
+      if (res_norm < tolerance)
         {
-          // The Jacobian - Matrix A - LHS
-          // J_ij = \int (mu_0 + mu_1 u^2) * grad_phi_j * grad_phi_i
-          //           + (2 mu_1 u) * phi_j * (grad_u * grad_phi_i)
-          cell_matrix(i, j) +=
-            (diffusion_coefficient *
-               (fe_values.shape_grad(j, q) * fe_values.shape_grad(i, q)) +
-             diffusion_derivative * fe_values.shape_value(j, q) *
-               (grad_u_loc * fe_values.shape_grad(i, q))) *
-            fe_values.JxW(q);
+          pcout << "  Converged!" << std::endl;
+          break;
         }
+
+      // 3. Solve the linear system J * delta_u = -R
+      //    (The 'solve_system' function computes 'delta_owned')
+      solve_system();
+
+      // 4. Update the solution: u_{k+1} = u_{k} + delta_u
+      //    We update the locally owned vector first.
+      solution_owned.add(1.0, delta_owned);
+
+      // 5. Distribute the new solution to the ghosted vector
+      //    so it can be used in the next assembly.
+      solution = solution_owned;
     }
+
+  pcout << "-----------------------------------------------" << std::endl;
 }
 
 void
