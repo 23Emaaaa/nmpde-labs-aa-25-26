@@ -82,9 +82,13 @@ Heat::setup()
     pcout << "  Initializing the system matrix" << std::endl;
     system_matrix.reinit(sparsity);
 
+    // Vector with ghost elements (read only - access to neighbors).
     pcout << "  Initializing vectors" << std::endl;
     system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
     solution.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+
+    // Vector for the solver (write access - no ghost).
+    solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
   }
 }
 
@@ -106,6 +110,7 @@ Heat::assemble()
   FullMatrix<double> cell_matrix(dofs_per_cell, dofs_per_cell);
   Vector<double>     cell_rhs(dofs_per_cell);
 
+  // Indices of the vector.
   std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
 
   // Reset the global matrix and vector, just in case.
@@ -129,6 +134,7 @@ Heat::assemble()
       cell_matrix = 0.0;
       cell_rhs    = 0.0;
 
+      // 1. Get U^n and grad(U^n) at quadrature points.
       // Evaluate the old solution and its gradient on quadrature nodes.
       fe_values.get_function_values(solution_old, solution_old_values);
       fe_values.get_function_gradients(solution_old, solution_old_grads);
@@ -137,14 +143,46 @@ Heat::assemble()
         {
           const double mu_loc = mu(fe_values.quadrature_point(q));
 
+          // Force terms f(t^n) and f(t^{n+1})
           const double f_old_loc =
             f(fe_values.quadrature_point(q), time - delta_t);
           const double f_new_loc = f(fe_values.quadrature_point(q), time);
 
+          const double dx = fe_values.JxW(q);
+
           for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
+              const double         phi_i      = fe_values.shape_value(i, q);
+              const Tensor<1, dim> grad_phi_i = fe_values.shape_grad(i, q);
+
+              // --- RHS Assembly ---
+              // Terms: (U^n, v) - (1 - theta)dt * (mu grad U^n, grad v) +
+              // Force.
+
+              double rhs_mass_term  = solution_old_values[q] * phi_i;
+              double rhs_stiff_term = -(1.0 - theta) * delta_t * mu_loc *
+                                      (solution_old_grads[q] * grad_phi_i);
+              double rhs_force_term =
+                delta_t * (theta * f_new_loc + (1.0 - theta) * f_old_loc) *
+                phi_i;
+
+              cell_rsh(i) +=
+                (rhs_mass_term + rhs_stiff_term + rhs_force_term) * dx;
+
+              // --- Matrix Assembly ---
+              // Terms: (u, v) + theta * dt * (mu grad u, grad v)
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                {}
+                {
+                  const double         phi_j      = fe_values.shape_value(j, q);
+                  const Tensor<1, dim> grad_phi_j = fe_values.shape_value(j, q);
+
+                  double matrix_mass_term = phi_j * phi_i;
+                  double matrix_stiff_term =
+                    theta * delta_t * mu_loc * (grad_phi_j * grad_phi_i);
+
+                  cell_matrix(i, j) +=
+                    (matrix_mass_term + matrix_stiff_term) * dx;
+                }
             }
         }
 
@@ -173,8 +211,12 @@ Heat::solve_linear_system()
 
   SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
 
+  // Solve for the owned DoFs.
   solver.solve(system_matrix, solution_owned, system_rhs, preconditioner);
   pcout << solver_control.last_step() << " CG iterations" << std::endl;
+
+  // Distribute the result to the ghosted vector for Output.
+  solution = solution_owned;
 }
 
 void
@@ -203,4 +245,42 @@ Heat::output() const
 
 void
 Heat::run()
-{}
+{
+  // Build meshes and matrices structures
+  setup();
+
+  // 1. Initial Condition
+  // Define u0(x) = x(x-1)y(y-1)z(z-1)
+  pcout << "Setting initial condition..." << std::endl;
+  VectorTools::interpolate(
+    dof_handler,
+    [](const Point<dim> &p) {
+      return p[0] * (p[0] - 1.0) * p[1] * (p[1] - 1.0) * p[2] * (p[2] - 1.0);
+    },
+    solution_owned);
+
+  // Set U^n = U^0
+  solution     = solution_owned;
+  solution_old = solution_owned;
+
+  // Output initial state
+  output();
+
+  // 2. Time Loop
+  pcout << "Starting the loop..." << std::endl;
+  while (time < T - 0.5 * delta_t)
+    {
+      time += delta_t;
+      timestep_number++;
+
+      pcout << "Time step " << timestep_number << "at t=" << time << std::endl;
+
+      assemble();
+      solve_linear_system();
+
+      // Update for next step: U^n <- U^{n+1}
+      solution_old = solution_owned;
+
+      output();
+    }
+}
