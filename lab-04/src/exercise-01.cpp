@@ -9,8 +9,8 @@ main(int argc, char *argv[])
   Utilities::MPI::MPI_InitFinalize mpi_init(argc, argv);
 
   // Define coefficients.
-  const auto mu = [](const Point<dim> & /*p*/) -> double { return 0.1; };
-  const auto f  = [](const Point<dim>  &/*p*/, const double  &/*t*/) -> double {
+  const auto mu = [](const Point<dim> & /*p*/) { return 0.1; };
+  const auto f  = [](const Point<dim>  &/*p*/, const double  &/*t*/) {
     return 0.0;
   };
 
@@ -19,10 +19,10 @@ main(int argc, char *argv[])
   // Theta = 1.0 (Implicit Euler)
   // Delta_t = 0.05
   Heat problem(/*mesh_filename = */ "../mesh/mesh-cube-10.msh",
-               /* degree = */ 1,
-               /* T = */ 1.0,
-               /* theta = */ 1.0,
-               /* delta_t = */ 0.05,
+               1,      // degree
+               1.0,    // T
+               0.0,    // theta (0.0 = Explicit Euler, 1.0 = Implicit Euler)
+               0.0025, // delta_t (Smaller step needed for Explicit stability!)
                mu,
                f);
 
