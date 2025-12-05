@@ -1,5 +1,18 @@
 #include "Heat.hpp"
 
+// Define the Initial Condition as a class inheriting from Function<dim>
+template <int dim>
+class InitialCondition : public Function<dim>
+{
+public:
+  virtual double
+  value(const Point<dim> &p,
+        const unsigned int /*component*/ = 0) const override
+  {
+    return p[0] * (p[0] - 1) * p[1] * (p[1] - 1) * p[2] * (p[2] - 1);
+  }
+};
+
 void
 Heat::setup()
 {
@@ -166,7 +179,7 @@ Heat::assemble()
                 delta_t * (theta * f_new_loc + (1.0 - theta) * f_old_loc) *
                 phi_i;
 
-              cell_rsh(i) +=
+              cell_rhs(i) +=
                 (rhs_mass_term + rhs_stiff_term + rhs_force_term) * dx;
 
               // --- Matrix Assembly ---
@@ -174,7 +187,7 @@ Heat::assemble()
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
                 {
                   const double         phi_j      = fe_values.shape_value(j, q);
-                  const Tensor<1, dim> grad_phi_j = fe_values.shape_value(j, q);
+                  const Tensor<1, dim> grad_phi_j = fe_values.shape_grad(j, q);
 
                   double matrix_mass_term = phi_j * phi_i;
                   double matrix_stiff_term =
@@ -252,12 +265,12 @@ Heat::run()
   // 1. Initial Condition
   // Define u0(x) = x(x-1)y(y-1)z(z-1)
   pcout << "Setting initial condition..." << std::endl;
-  VectorTools::interpolate(
-    dof_handler,
-    [](const Point<dim> &p) {
-      return p[0] * (p[0] - 1.0) * p[1] * (p[1] - 1.0) * p[2] * (p[2] - 1.0);
-    },
-    solution_owned);
+
+  // Instantiate the class defined above (top fo the file)
+  InitialCondition<dim> initial_condition;
+
+  // Let's use the object not a lambda as done before.
+  VectorTools::interpolate(dof_handler, initial_condition, solution_owned);
 
   // Set U^n = U^0
   solution     = solution_owned;
@@ -273,7 +286,7 @@ Heat::run()
       time += delta_t;
       timestep_number++;
 
-      pcout << "Time step " << timestep_number << "at t=" << time << std::endl;
+      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
 
       assemble();
       solve_linear_system();
